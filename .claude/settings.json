@@ -1,23 +1,49 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --quiet python \"$CLAUDE_PROJECT_DIR/.claude/hooks/block_dangerous.py\" || { rc=$?; [ $rc -eq 2 ] || echo \"block_dangerous: 인터프리터 실패(exit $rc) — 안전을 위해 막음\" >&2; exit 2; }"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --quiet python \"$CLAUDE_PROJECT_DIR/scripts/hooks/tdd_guard.py\" || { rc=$?; echo \"tdd_guard: 인터프리터 실패(exit $rc) — 안전을 위해 막음\" >&2; exit 2; }"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --quiet python \"$CLAUDE_PROJECT_DIR/scripts/hooks/audit_log.py\" || exit 0"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "npm run lint 2>&1 && npm run build 2>&1 && npm run test 2>&1"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
+            "command": "uv run --no-project --quiet python \"$CLAUDE_PROJECT_DIR/scripts/hooks/stop_verify.py\" || exit 0",
+            "timeout": 40
+          },
           {
             "type": "command",
-            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE 'rm\\s+-rf|git\\s+push\\s+--force|git\\s+reset\\s+--hard|DROP\\s+TABLE'; then echo 'BLOCKED: 위험한 명령어가 감지되었습니다.' >&2; exit 1; fi"
+            "command": "uv run --no-project --quiet python \"$CLAUDE_PROJECT_DIR/scripts/hooks/issue_handoff.py\" || exit 0",
+            "timeout": 20
           }
         ]
       }

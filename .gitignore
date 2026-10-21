@@ -7,3 +7,13 @@ tsconfig.tsbuildinfo
 # phase execution outputs
 phases/**/phase*-output.json
 phases/**/step*-output.json
+
+__pycache__/
+
+# worktree 슬롯 잠금(scripts/slot.py) — gitwatch 가 읽는다
+.slot-lock
+
+# 훅 로컬 상태(scripts/hooks/audit_log.py · issue_handoff.py)
+.claude/audit.jsonl
+.claude/.handoff-stamp
+.claude/current-issue

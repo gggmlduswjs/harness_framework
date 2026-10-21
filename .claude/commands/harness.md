@@ -1,12 +1,16 @@
 이 프로젝트는 Harness 프레임워크를 사용한다. 아래 워크플로우에 따라 작업을 진행하라.
 
+> 원본: bigsix .claude/commands/harness.md
+>
+> 산출물은 `phases/`(실행할 때 생김). execute.py 는 `claude -p --dangerously-skip-permissions` 로 step 을 돌리고 바뀐 파일만 이름으로 add 해 커밋한다(.env*·audit.jsonl 제외). **메인 체크아웃에서는 거절**한다 — `harness.json` `worktree_base` 아래 `<제품>-<레이어>` 슬롯을 `uv run python scripts/slot.py open <슬롯>` 으로 만들고 재사용한다(상한 `slots.max_live`·`max_live_server`). 매 step 프롬프트 맨 앞에 금지 목록(운영 DB 쓰기·마이그레이션 적용·머지·push·`git add -A`·.env 읽기)이 붙는다. 하네스를 고치면 `uv run --no-project --with pytest python -m pytest scripts/ -q` 를 green 으로 유지한다.
+
 ---
 
 ## 워크플로우
 
 ### A. 탐색
 
-`/docs/` 하위 문서(PRD, ARCHITECTURE, ADR 등)를 읽고 프로젝트의 기획·아키텍처·설계 의도를 파악한다. 필요시 Explore 에이전트를 병렬로 사용한다.
+`docs/PRD.md`(마스터 spec)에서 시작해 `docs/` 하위 문서(ARCHITECTURE·ADR·제품 spec 등)를 읽고 프로젝트의 기획·아키텍처·설계 의도를 파악한다. 필요시 Explore 에이전트를 병렬로 사용한다.
 
 ### B. 논의
 
@@ -22,7 +26,7 @@
 2. **자기완결성** — 각 step 파일은 독립된 Claude 세션에서 실행된다. "이전 대화에서 논의한 바와 같이" 같은 외부 참조는 금지한다. 필요한 정보는 전부 파일 안에 적는다.
 3. **사전 준비 강제** — 관련 문서 경로와 이전 step에서 생성/수정된 파일 경로를 명시한다. 세션이 코드를 읽고 맥락을 파악한 뒤 작업하도록 유도한다.
 4. **시그니처 수준 지시** — 함수/클래스의 인터페이스만 제시하고 내부 구현은 에이전트 재량에 맡긴다. 단, 설계 의도에서 벗어나면 안 되는 핵심 규칙(멱등성, 보안, 데이터 무결성 등)은 반드시 명시한다.
-5. **AC는 실행 가능한 커맨드** — "~가 동작해야 한다" 같은 추상적 서술이 아닌 `npm run build && npm test` 같은 실제 실행 가능한 검증 커맨드를 포함한다.
+5. **AC는 실행 가능한 커맨드** — "~가 동작해야 한다" 같은 추상적 서술이 아닌 `uv run pytest tests/<모듈> -q` 같은 실제 실행 가능한 검증 커맨드를 포함한다.
 6. **주의사항은 구체적으로** — "조심해라" 대신 "X를 하지 마라. 이유: Y" 형식으로 적는다.
 7. **네이밍** — step name은 kebab-case slug로, 해당 step의 핵심 모듈/작업을 한두 단어로 표현한다 (예: `project-setup`, `api-layer`, `auth-flow`).
 
@@ -55,6 +59,7 @@
 {
   "project": "<프로젝트명>",
   "phase": "<task-name>",
+  "issue": 151,
   "steps": [
     { "step": 0, "name": "project-setup", "status": "pending" },
     { "step": 1, "name": "core-types", "status": "pending" },
@@ -67,6 +72,7 @@
 
 - `project`: 프로젝트명 (CLAUDE.md 참조).
 - `phase`: task 이름. 디렉토리명과 일치시킨다.
+- `issue`: GitHub 이슈 번호(필수). 없거나 step md 에 근거 `docs/` 경로가 없으면 execute.py 가 실행을 거부한다(근거 = `harness.json` `evidence.pattern` 에 맞고 레포에 실제로 있는 문서, 가드레일 문서·`evidence.not_evidence` 제외).
 - `steps[].step`: 0부터 시작하는 순번.
 - `steps[].name`: kebab-case slug.
 - `steps[].status`: 초기값은 모두 `"pending"`.
@@ -92,8 +98,10 @@
 
 먼저 아래 파일들을 읽고 프로젝트의 아키텍처와 설계 의도를 파악하라:
 
+- `/CLAUDE.md`
 - `/docs/ARCHITECTURE.md`
 - `/docs/ADR.md`
+- {이 step 근거 spec 경로 — 예: `/docs/specs/<기능>.md` (필수, 없으면 execute.py 가 거부)}
 - {이전 step에서 생성/수정된 파일 경로}
 
 이전 step에서 만들어진 코드를 꼼꼼히 읽고, 설계 의도를 이해한 뒤 작업하라.
@@ -107,8 +115,8 @@
 ## Acceptance Criteria
 
 ```bash
-npm run build   # 컴파일 에러 없음
-npm test        # 테스트 통과
+uv run pytest tests/<고친 곳>     # 고친 곳에 걸린 테스트만(전체 스위트는 CI)
+{고친 파일에 걸린 타입체크·린트}
 ```
 
 ## 검증 절차
@@ -132,14 +140,15 @@ npm test        # 테스트 통과
 ### E. 실행
 
 ```bash
-python3 scripts/execute.py {task-name}        # 순차 실행
-python3 scripts/execute.py {task-name} --push  # 실행 후 push
+python scripts/execute.py {task-name}        # 순차 실행
+python scripts/execute.py {task-name} --push  # 실행 후 push — push 는 사람 승인 후에만
 ```
 
 execute.py가 자동으로 처리하는 것:
 
 - `feat-{task-name}` 브랜치 생성/checkout
-- 가드레일 주입 — CLAUDE.md + docs/*.md 내용을 매 step 프롬프트에 포함
+- worktree 검사 — 메인 체크아웃이면 아무것도 하지 않고 종료
+- 가드레일 주입 — 금지 목록 + `harness.json` `guardrail_docs` 중 있는 문서만 매 step 프롬프트에 포함
 - 컨텍스트 누적 — 완료된 step의 summary를 다음 step 프롬프트에 전달
 - 자가 교정 — 실패 시 최대 3회 재시도하며, 이전 에러 메시지를 프롬프트에 피드백
 - 2단계 커밋 — 코드 변경(`feat`)과 메타데이터(`chore`)를 분리 커밋
