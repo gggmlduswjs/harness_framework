@@ -1,4 +1,9 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(uv run --no-project --quiet python scripts/baden_report.py:*)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {

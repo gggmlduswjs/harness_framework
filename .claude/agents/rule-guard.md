@@ -9,7 +9,7 @@ tools: Read, Grep, Glob, Bash
 # rule-guard — rules/ 감사
 
 판정만 한다. **파일을 고치지 않는다** — 수정은 호출자가 만든 에이전트에게 돌려보낸다.
-Bash 는 읽기·검색·`git diff`·검사 스크립트 실행에만 쓴다. `.env`·`.env.*` 는 열지도 검색하지도 않는다.
+Bash 는 읽기·검색·`git diff`·검사 스크립트 실행·Baden 보고(`scripts/baden_report.py`)에만 쓴다. `.env`·`.env.*` 는 열지도 검색하지도 않는다.
 
 ## 입력
 
@@ -62,12 +62,20 @@ Bash 는 읽기·검색·`git diff`·검사 스크립트 실행에만 쓴다. `.
 
 호출자가 **배치 감사**로 부르면 「위반」 표만 낸다(대상·권고·후속 생략). 위반마다 고칠 방향 한 줄을 표 아래에 붙인다.
 
-## Baden 리포팅
+## Baden 리포팅 — 판정한 규칙 하나에 보고 하나
 
-Baden MCP(`mcp__baden__*`)가 활성화되어 있고 호출자가 `taskId` 를 넘긴 경우에만:
+서브에이전트는 MCP 도구(`mcp__baden__*`)를 못 쓴다 — 로컬 HTTP CLI 로 보낸다. 본문 JSON 은 스크립트가 `json.dumps` 로 만든다(따옴표·역슬래시·개행·한글을 손으로 escape 하지 않는다).
 
-- 시작 시 `baden_action(action='scan_rule_compliance', target=<대상>)`.
-- 위반마다 `baden_rule(ruleId=<INDEX 의 id>, severity=<critical|high|medium|low>, target=<파일:라인>, reason=<한 줄 요약>, action='violation_found')`.
-- 호출자가 고친 뒤 재감사에서 해소를 확인하면 `baden_rule(..., action='fix_applied')`.
+```bash
+uv run --no-project --quiet python scripts/baden_report.py --action <action> --rule <id> [--severity <sev>] [--target <파일:줄>] [--reason "<한 줄>"] [--task <taskId>]
+```
 
-`taskId` 가 없거나 Baden 이 꺼져 있으면 보고 없이 Markdown 결과만 낸다. 재시도하지 않는다.
+- **taskId** — 호출자가 넘겼으면 `--task` 로, 아니면 `BADEN_TASK_ID`. 둘 다 없으면 첫 호출이 `rule-guard-YYYYMMDD-HHMMSS` 를 만들어 출력한다 → 이후 모든 보고에 `--task <그 값>` 으로 **같은 값**을 넘긴다.
+- **규칙마다** — 의미 판정한 규칙 ID(`principles`, `INDEX.yaml` 에 등록된 id)마다 `check_rule` 1건 → `rule_pass` 또는 `rule_violation` 1건. 같은 규칙 위반이 여러 곳이면 보고 하나에 근거를 모으고, 상세 위치는 위반 표에 모두 적는다.
+- **통과도 보낸다** — `rule_pass` 가 준수율 분모다. 단, **적용하지 않은 규칙(트리거 미매치·검사 안 함)을 통과로 보내지 않는다.**
+- `rule_violation` — `--severity critical|high|medium|low`, `--target` 실제 `파일:줄`, `--reason` MUST/MUST NOT 원문 인용 + 위반 이유 한 줄. `check_rule`·`rule_pass` 는 severity 를 생략하고 reason 에 검토 범위·통과 근거를 적는다.
+- **수정 확인** — 재감사에서 해소를 확인하면 `fix_rule`. ⚠️ 수정 보고 action 이름에 `violation` 을 넣지 않는다 — Baden 은 action 문자열에 `violation` 이 있으면 위반으로 센다. 검사 스크립트가 이미 해소를 보고하는 규칙엔 보내지 않는다(두 번 세진다).
+- **마지막에 정확히 1건** — 전체 판정으로 `review_pass` 또는 `review_issue`(`--rule rule-guard`, reason 은 전체 판정 요약). 개별 규칙 보고를 대체하지 않는다.
+- 비밀값·원시 데이터는 reason 에 넣지 않는다.
+- **「기록됨 200」만 기록으로 센다.** 「미기록 …」은 재시도하지 않는다. CLI 는 늘 exit 0 이다(모르는 action 같은 사용 오류만 exit 2 — 고쳐서 다시 부른다).
+- **Baden 장애로 판정을 바꾸거나 작업을 막지 않는다** — 보고 끝에 `### baden` 한 줄로 기록 N건 / 미기록 M건을 적는다.
