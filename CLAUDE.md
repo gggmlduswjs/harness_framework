@@ -21,6 +21,22 @@
 - 큰 작업은 `/harness`로 step 분해 → `scripts/execute.py` 순차 실행.
 - 커밋 메시지는 conventional commits 형식을 따를 것 (feat:, fix:, docs:, refactor:)
 
+## 규칙 체계 (`rules/`)
+```
+rules/
+  INDEX.yaml          ← 트리거 레지스트리 (paths/patterns/imports/events)
+  principles.md       ← Tier 1 원칙 ≤6, 항상 로드
+  concerns/C*.md      ← Tier 2 횡단 관심사
+  specifics/S-*.md    ← Tier 3 도메인 규칙
+  _analysis.md / _audit-vN.md ← 분석·감사 기록 (규칙 아님)
+```
+- **로딩:** `principles.md` 는 항상. 파일을 읽거나 편집할 때 `INDEX.yaml` trigger 가 맞으면 해당 concern/specific 을 추가로 읽는다.
+- MUST / MUST NOT 을 침범하게 되면 수정 제안 **전에** 규칙 ID 를 밝혀 경고한다. PREFER / Exception 은 판단 맥락으로만.
+- **compaction 후:** `principles.md`·`INDEX.yaml` 을 다시 읽는다(SessionStart `compact` 훅 `.claude/hooks/rules_reload.py` 가 출력). 본문은 trigger 로 재판단.
+- **`rule-guard` 호출:** 명시 요청 시 · 여러 파일을 편집한 뒤 · PR 전. 판정만 하고 고치지 않는다.
+- 코드로 판정 가능한 것 = `rules/`, 판정 불가능한 작업 방식 = `tasks/*-protocol.md`. 둘이 어긋나면 프로토콜이 배치 기록을 이긴다.
+- 새 레포에 규칙 세우기: `rules/README.md`.
+
 ## 명령어
 - {개발 서버·빌드·테스트 명령 (예: `npm run dev`, `uv run pytest tests/<고친 곳>`)}
 - 린트는 Stop 훅이 바뀐 파일만 돌린다 — 명령은 `harness.json` `lint`.

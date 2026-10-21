@@ -1,0 +1,54 @@
+# Rule Registry — 트리거 조건에 따라 로드할 규칙을 결정하는 인덱스.
+# 원본: ibare/FACET rules/INDEX.yaml · ibare/baden 부트스트랩 가이드 (뼈대만 범용화)
+# -------------------------------------------------------------------
+# Trigger types (한 규칙 안에서 OR — 하나라도 맞으면 로드):
+#   paths:    파일 경로 glob 패턴 (루트 기준)
+#   patterns: 코드에서 발견되는 문자열/정규식
+#   imports:  import/include/require 문에 포함된 모듈명
+#   events:   작업 유형 (create-file, rename-file, modify-file, ...)
+#
+# 린터·타입체커가 잡는 것은 여기 넣지 않는다. 의미·맥락 판단이 필요한 것만.
+# Tier: always(principles, 항상) → concerns(C*, 횡단) → specifics(S-*, 도메인)
+#
+# TODO: 아래 C1 은 예시다. 레포에 맞게 바꾸거나 지운다.
+
+version: 1
+project: my-project   # harness.json 의 project 와 같아야 한다
+
+# Baden MCP 연동: 규칙 ID(id:) 를 baden_rule 의 ruleId 로 그대로 쓴다.
+# 예) baden_rule(taskId=..., ruleId='C1', severity='high', target='src/foo.py:42', action='violation_found')
+baden:
+  projectName: my-project   # harness.json 의 project 와 같아야 한다
+  ruleIdField: id
+
+# ─────────────────────────────────────
+# Always loaded (Tier 1 — Principles)
+# ─────────────────────────────────────
+always:
+  - file: principles.md
+    description: 의존성 방향 · 설정 단일 출처 (예시 — 교체할 것)
+
+# ─────────────────────────────────────
+# Concerns (Tier 2 — Cross-cutting)
+# ─────────────────────────────────────
+concerns:
+  - id: C1
+    file: concerns/C1-example.md
+    description: 설정값은 한 곳(설정 모듈)에서만 읽는다 (예시)
+    triggers:
+      paths:
+        - "src/**"
+      patterns:
+        - "os.environ"
+        - "process.env"
+        - "getenv("
+      imports:
+        - "dotenv"
+      events:
+        - create-file
+
+# ─────────────────────────────────────
+# Specifics (Tier 3 — Domain-specific)
+# ─────────────────────────────────────
+# 형식은 concerns 와 같고 id 는 S-<도메인>, file 은 specifics/S-<도메인>.md
+specifics: []
