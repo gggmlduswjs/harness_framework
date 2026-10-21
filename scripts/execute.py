@@ -6,7 +6,7 @@ Usage:
     python scripts/execute.py <phase-dir> [--push] [--engine claude|codex]
 
 --engine codex: Codex CLI 는 Claude Code 훅(block-dangerous·tdd-guard·audit-log)을 거치지 않는다.
-위험 명령 차단·TDD 강제·감사 기록이 없고, 남는 방어선은 프롬프트 맨 앞 금지 목록(FORBIDDEN)뿐이다.
+Claude 훅은 없지만 workspace-write 샌드박스와 승인 거절 정책을 명시한다.
 step 출력은 JSONL 전체 대신 마지막 agent_message 와 usage 만 stdout 에 저장한다.
 
 원본: bigsix scripts/execute.py (이 레포 옛 execute.py 의 진화판).
@@ -43,14 +43,16 @@ ROOT = harness_config.ROOT
 _CFG = harness_config.load()
 WORKTREE_BASE = slot.WORKTREE_BASE
 
-# step 실행 엔진. 둘 다 권한 확인 없이 돈다 — 그래서 FORBIDDEN 을 프롬프트 맨 앞에 붙인다.
+# Non-interactive engines deny unapproved actions; never disable permission boundaries.
 ENGINES = {
-    "claude": ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json"],
+    "claude": ["claude", "-p", "--permission-mode", "dontAsk", "--output-format", "json"],
     # Windows npm 설치는 codex.cmd 라 which 로 찾는다(CreateProcess 는 .exe 만 붙인다).
     "codex": [
         shutil.which("codex") or "codex",
         "exec",
-        "--dangerously-bypass-approvals-and-sandbox",
+        "--sandbox", "workspace-write",
+        "-c", 'approval_policy="never"',
+        "-c", "sandbox_workspace_write.network_access=false",
         "--json",
         "-",
     ],
@@ -59,7 +61,8 @@ ENGINE_TIMEOUT_S = 1800
 # Claude Code 훅(.claude/settings.json)은 claude 엔진에만 걸린다.
 NO_HOOKS_WARN = (
     "  WARN: 엔진 {engine}: Claude Code 훅(block-dangerous·tdd-guard·audit-log)을 거치지 않는다 "
-    "— 위험 명령 차단·TDD 강제·감사 기록 없음, 금지 목록 프롬프트만 남는다"
+    "— Claude 훅 없음; workspace-write 샌드박스·네트워크 제한·승인 거절 정책 사용. "
+    "권한 부족 시 제한을 우회하지 말고 blocked_reason을 기록한다"
 )
 
 
@@ -107,7 +110,7 @@ def _compact_codex(stdout: str, exit_code: int = 0) -> str:
 
 def _kill_tree(proc: subprocess.Popen) -> None:
     if sys.platform == "win32":  # 엔진 자식까지(트리) 끈다
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
     else:  # start_new_session 으로 만든 그룹 전체
         os.killpg(proc.pid, signal.SIGKILL)
     proc.wait()
@@ -155,7 +158,7 @@ def _run_engine(
         return subprocess.CompletedProcess(cmd, code, fout.read(), ferr.read() + note)
 
 
-# 매 step 프롬프트 맨 앞에 붙는다. claude -p 를 --dangerously-skip-permissions 로 부르기 때문.
+# 매 step의 작업 제약. 프롬프트는 권한 검사나 OS 샌드박스를 대신하지 않는다.
 FORBIDDEN = (
     "## ⛔ 금지 목록 (어기면 step 실패로 처리한다)\n\n"
     "- 운영 DB 쓰기 금지 (운영 DB 호스트 접속 포함)\n"
@@ -187,7 +190,7 @@ def worktree_error(cwd: str | Path) -> str | None:
 
     def git(*args: str) -> str | None:
         r = subprocess.run(
-            ["git", *args], cwd=str(cwd), capture_output=True, text=True, encoding="utf-8"
+            ["git", *args], cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", check=False
         )
         return r.stdout.strip() if r.returncode == 0 else None
 
@@ -202,7 +205,7 @@ def worktree_error(cwd: str | Path) -> str | None:
         return f"ERROR: git 저장소가 아닙니다 ({cwd}).\n{hint}"
     if Path(git_dir).resolve() == Path(common).resolve():
         return (
-            "ERROR: 메인 체크아웃에서는 execute.py 를 돌리지 않는다 — step 세션이 권한 확인 없이 "
+            "ERROR: 메인 체크아웃에서는 execute.py 를 돌리지 않는다 — step 세션이 변경사항을 "
             f"커밋한다 ({cwd}).\n{hint}"
         )
     return None
@@ -403,7 +406,7 @@ class StepExecutor:
 
     def _run_git(self, *args) -> subprocess.CompletedProcess:
         cmd = ["git", *args]
-        return subprocess.run(cmd, cwd=self._root, capture_output=True, text=True, encoding="utf-8")
+        return subprocess.run(cmd, cwd=self._root, capture_output=True, text=True, encoding="utf-8", check=False)
 
     def _checkout_branch(self):
         branch = f"feat-{self._phase_name}"
@@ -626,10 +629,18 @@ class StepExecutor:
                 tag += f" [retry {attempt}/{self.MAX_RETRIES}]"
 
             with progress_indicator(tag) as pi:
-                self._invoke_claude(step, preamble)
+                output = self._invoke_claude(step, preamble)
                 elapsed = int(pi.elapsed)
 
             index = self._read_json(self._index_file)
+            if output and output.get("exitCode", 0) != 0:
+                for current in index["steps"]:
+                    if current["step"] == step_num and current.get("status") != "blocked":
+                        current["status"] = "error"
+                        current["error_message"] = f"engine exit code {output['exitCode']} (see step output)"
+                        current.pop("completed_at", None)
+                        current.pop("summary", None)
+                self._write_json(self._index_file, index)
             status = next(
                 (s.get("status", "pending") for s in index["steps"] if s["step"] == step_num),
                 "pending",

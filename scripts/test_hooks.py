@@ -18,9 +18,26 @@ BLOCK = ROOT / ".claude" / "hooks" / "block_dangerous.py"
 AUDIT = ROOT / "scripts" / "hooks" / "audit_log.py"
 
 
+@pytest.mark.parametrize("payload", ["{broken", "[]", "{}", '{"tool_input":null}',
+                                    '{"tool_input":{"command":[]}}'])
+def test_dangerous_hook_fails_closed_on_invalid_input(payload):
+    result = subprocess.run([sys.executable, "-I", str(BLOCK)], input=payload,
+                            capture_output=True, text=True, encoding="utf-8", check=False)
+    assert result.returncode == 2
+    assert "BLOCKED" in result.stderr
+
+
+def test_secret_file_guard_covers_write_and_edit_tools():
+    settings = json.loads((ROOT / ".claude/settings.json").read_text())
+    guards = [entry for entry in settings["hooks"]["PreToolUse"]
+              if any("block_dangerous.py" in hook["command"] for hook in entry["hooks"])]
+    assert any({"Read", "Edit", "Write"} <= set(g["matcher"].split("|")) for g in guards)
+
+
 def _block_rc(tool_input: dict) -> int:
     r = subprocess.run(
         [sys.executable, "-I", str(BLOCK)],
+        check=False,
         input=json.dumps({"tool_input": tool_input}),
         capture_output=True,
         text=True,
@@ -133,6 +150,7 @@ def _tdd_denies(proj: Path, tool_input: dict, enabled: bool = True) -> bool:
     (proj / "harness.json").write_text(json.dumps(cfg), encoding="utf-8")
     r = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "hooks" / "tdd_guard.py")],
+        check=False,
         input=json.dumps({"tool_input": tool_input}),
         capture_output=True,
         text=True,

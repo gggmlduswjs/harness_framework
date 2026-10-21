@@ -1,6 +1,8 @@
 # 프로젝트: {프로젝트명}
 
 ## 어디를 보나
+- [docs/WORKFLOW.md](docs/WORKFLOW.md) — PRD부터 구현·검증·회고까지 공통 흐름
+- [docs/SAFETY.md](docs/SAFETY.md) — 실행 권한과 실패 처리
 - [docs/PRD.md](docs/PRD.md) — 무엇을·왜
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 구조·데이터 흐름
 - [docs/ADR.md](docs/ADR.md) — 기술 결정

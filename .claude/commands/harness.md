@@ -2,7 +2,7 @@
 
 > 원본: bigsix .claude/commands/harness.md
 >
-> 산출물은 `phases/`(실행할 때 생김). execute.py 는 `claude -p --dangerously-skip-permissions` 로 step 을 돌리고 바뀐 파일만 이름으로 add 해 커밋한다(.env*·audit.jsonl 제외). **메인 체크아웃에서는 거절**한다 — `harness.json` `worktree_base` 아래 `<제품>-<레이어>` 슬롯을 `uv run python scripts/slot.py open <슬롯>` 으로 만들고 재사용한다(상한 `slots.max_live`·`max_live_server`). 매 step 프롬프트 맨 앞에 금지 목록(운영 DB 쓰기·마이그레이션 적용·머지·push·`git add -A`·.env 읽기)이 붙는다. 하네스를 고치면 `uv run --no-project --with pytest python -m pytest scripts/ -q` 를 green 으로 유지한다.
+> 산출물은 `phases/`에 둔다. 공통 흐름과 템플릿은 `docs/WORKFLOW.md`, 권한 정책은 `docs/SAFETY.md`를 따른다. execute.py는 승인·샌드박스를 우회하지 않으며, 권한 부족은 blocked/error로 처리한다. **메인 체크아웃에서는 거절**한다 — `harness.json`의 슬롯을 준비한 뒤 실행한다. 변경한 파일만 이름으로 add해 커밋한다. 하네스를 고치면 `uv run --no-project --with pytest python -m pytest scripts/ -q`를 green으로 유지한다.
 
 ---
 

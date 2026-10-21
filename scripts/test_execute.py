@@ -20,6 +20,17 @@ import execute
 import slot
 
 
+def test_engine_commands_keep_real_permission_boundaries():
+    claude = execute.ENGINES["claude"]
+    codex = execute.ENGINES["codex"]
+    assert "--dangerously-skip-permissions" not in claude
+    assert claude[claude.index("--permission-mode") + 1] == "dontAsk"
+    assert "--dangerously-bypass-approvals-and-sandbox" not in codex
+    assert codex[codex.index("--sandbox") + 1] == "workspace-write"
+    assert 'approval_policy="never"' in codex
+    assert "sandbox_workspace_write.network_access=false" in codex
+
+
 @pytest.fixture(autouse=True)
 def _config(monkeypatch):
     """harness.json 값과 무관하게 같은 슬롯 이름·가드레일·근거 규칙으로 검사한다."""
@@ -347,6 +358,20 @@ def test_completed_records_timestamp(phase, monkeypatch):
     assert s["status"] == "completed" and "completed_at" in s
 
 
+def test_failed_engine_cannot_report_completed(phase, monkeypatch):
+    def fail(step, preamble):
+        _fake_claude(phase, status="completed", summary="unverified")(step, preamble)
+        return {"exitCode": 1}
+
+    monkeypatch.setattr(phase, "_invoke_claude", fail)
+    with pytest.raises(SystemExit) as error:
+        phase._execute_single_step({"step": 0, "name": "setup"}, "")
+    assert error.value.code == 1
+    state = phase._read_json(phase._index_file)["steps"][0]
+    assert state["status"] == "error" and "engine exit code 1" in state["error_message"]
+    assert "completed_at" not in state and "summary" not in state
+
+
 def test_blocked_exits_2(phase, monkeypatch):
     monkeypatch.setattr(
         phase, "_invoke_claude", _fake_claude(phase, status="blocked", blocked_reason="API 키")
@@ -412,7 +437,7 @@ def test_compact_codex_keeps_failure_events():
     noise = json.dumps({"type": "item.completed", "item": {"type": "command_execution"}})
     error = json.dumps({"type": "error", "message": "stream disconnected"})
     failed = json.dumps({"type": "turn.failed", "error": {"message": "quota exceeded"}})
-    out = execute._compact_codex("\n".join([noise, error, noise, failed]), 0)
+    out = execute._compact_codex(f"{noise}\n{error}\n{noise}\n{failed}", 0)
     assert out.splitlines() == [error, failed]  # 정상 종료면 원문 꼬리 없이 실패 줄만
     assert "[harness] raw tail:" in execute._compact_codex(noise, 1)
 
