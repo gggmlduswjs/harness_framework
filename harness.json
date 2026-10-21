@@ -1,0 +1,30 @@
+{
+  "project": "my-project",
+  "worktree_base": "../my-project-wt",
+  "slots": {
+    "products": ["web", "api"],
+    "layers": ["front", "server", "agent"],
+    "extra": ["ops"],
+    "max_live": 8,
+    "max_live_server": 2
+  },
+  "guardrail_docs": ["CLAUDE.md", "docs/PRD.md", "docs/ARCHITECTURE.md"],
+  "evidence": {
+    "pattern": "docs/[\\w./-]+\\.md",
+    "not_evidence": ["docs/ROADMAP.md", "docs/SETUP.md"]
+  },
+  "status": {
+    "check_docs": ["docs/ROADMAP.md"],
+    "group_labels": ["track:A", "track:B"],
+    "flag_labels": ["decision", "blocked", "in-progress"]
+  },
+  "lint": {
+    "globs": ["*.py"],
+    "command": ["uvx", "ruff", "check"]
+  },
+  "tdd_guard": {
+    "enabled": false,
+    "targets": ["src/*/service.py", "src/*/rules.py", "src/*_rules.py", "src/*/pricing*.py"],
+    "tests": ["tests/**/{parent}/test_{mod}.py", "tests/**/test_{parent}_{mod}.py"]
+  }
+}

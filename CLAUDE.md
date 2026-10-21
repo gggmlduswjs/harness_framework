@@ -22,10 +22,25 @@
 - 커밋 메시지는 conventional commits 형식을 따를 것 (feat:, fix:, docs:, refactor:)
 
 ## 명령어
-npm run dev      # 개발 서버
-npm run build    # 프로덕션 빌드
-npm run lint     # ESLint
-npm run test     # 테스트
+- {개발 서버·빌드·테스트 명령 (예: `npm run dev`, `uv run pytest tests/<고친 곳>`)}
+- 린트는 Stop 훅이 바뀐 파일만 돌린다 — 명령은 `harness.json` `lint`.
+- 하네스: `uv run python scripts/slot.py open <제품>-<레이어>` → 그 슬롯에서 `python scripts/execute.py <phase>` · 상태 `uv run python scripts/status.py` · 하네스 테스트 `uv run --no-project --with pytest python -m pytest scripts/ -q`
+
+## 하네스 설정 (`harness.json` — 레포마다 다른 값은 여기만 고친다)
+- `project` — 프로젝트 이름(Baden Project Name 으로도 쓴다)
+- `worktree_base` — 슬롯 worktree 폴더. 상대 경로는 메인 체크아웃 기준
+- `slots` — `products`·`layers`·`extra`(슬롯 이름 = `<product>-<layer>` 또는 extra, 접미 `-2..-9`), `max_live`(살아 있는 슬롯 상한), `max_live_server`(`server` 레이어 상한)
+- `guardrail_docs` — execute.py 가 매 step 프롬프트에 넣는 문서(있는 것만)
+- `evidence` — step md 근거 문서 정규식 `pattern`, 근거로 안 치는 `not_evidence`
+- `status` — `check_docs`(손 상태 표기·없는 PR 검사 대상), `group_labels`(이슈 묶음), `flag_labels`(이슈 옆 표시)
+- `lint` — Stop 훅: 바뀐 파일 중 `globs` 에 맞는 것만 `command` 뒤에 붙여 실행(30초, 막지 않음)
+- `tdd_guard` — `enabled`(기본 false), `targets`(테스트 없이 못 고치는 파일 글롭, 루트 기준), `tests`(통과 조건 글롭 — `{parent}` 상위 폴더, `{mod}` 파일 이름)
+
+## Baden Monitoring (선택 — 안 쓰면 이 절을 지운다)
+- Project Name: `harness.json` 의 `project`.
+- 새 지시를 받으면 작업 시작 전에 `baden_start_task`(prompt, projectName) → 받은 taskId 를 이후 모든 보고에 쓴다.
+- 방향·계획을 정하면 `baden_plan`. 읽기·검색·수정·테스트 실행 전에 `baden_action`, 검증은 `baden_verify`. 끝나면 `baden_complete_task`.
+- baden 서버가 꺼져 있어도 보고는 조용히 버려지고 작업은 막히지 않는다 — 재시도하지 않는다.
 
 ## 상속 (계층)
 - 전역 습관·취향은 `~/.claude/CLAUDE.md`(모든 프로젝트)에서 상속 → 충돌 시 이 파일(프로젝트 규칙)이 우선.

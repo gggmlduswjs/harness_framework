@@ -1,559 +1,434 @@
-"""
-execute.py 리팩터링 안전망 테스트.
-리팩터링 전후 동작이 동일한지 검증한다.
+"""scripts/execute.py 하네스의 안전장치 테스트.
+
+깨지면: 메인 체크아웃에서 권한 확인 없는 커밋이 돌거나(.env 포함), 금지 목록이 빠지거나,
+cp949 로 한글 규칙을 못 읽거나, step 상태가 틀리게 기록되거나,
+이슈·docs 근거 없는 phase 가 돈다.
+실행: uv run pytest scripts/test_execute.py
 """
 
 import json
 import os
 import subprocess
 import sys
-import textwrap
-from datetime import datetime, timezone, timedelta
+import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent))
-import execute as ex
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import execute
+import slot
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def tmp_project(tmp_path):
-    """phases/, CLAUDE.md, docs/ 를 갖춘 임시 프로젝트 구조."""
-    phases_dir = tmp_path / "phases"
-    phases_dir.mkdir()
-
-    claude_md = tmp_path / "CLAUDE.md"
-    claude_md.write_text("# Rules\n- rule one\n- rule two")
-
-    docs_dir = tmp_path / "docs"
-    docs_dir.mkdir()
-    (docs_dir / "arch.md").write_text("# Architecture\nSome content")
-    (docs_dir / "guide.md").write_text("# Guide\nAnother doc")
-
-    return tmp_path
+@pytest.fixture(autouse=True)
+def _config(monkeypatch):
+    """harness.json 값과 무관하게 같은 슬롯 이름·가드레일·근거 규칙으로 검사한다."""
+    monkeypatch.setattr(slot, "PRODUCTS", ("mall",))
+    monkeypatch.setattr(slot, "LAYERS", ("front", "server"))
+    monkeypatch.setattr(execute.StepExecutor, "GUARDRAIL_DOCS", ("CLAUDE.md", "docs/PRD.md"))
+    monkeypatch.setattr(execute, "EVIDENCE", execute.re.compile(r"(?<![\w-])(docs/[\w./-]+\.md)"))
+    monkeypatch.setattr(execute, "NOT_EVIDENCE", ("docs/ROADMAP.md",))
 
 
-@pytest.fixture
-def phase_dir(tmp_project):
-    """step 3개를 가진 phase 디렉토리."""
-    d = tmp_project / "phases" / "0-mvp"
-    d.mkdir()
-
-    index = {
-        "project": "TestProject",
-        "phase": "mvp",
-        "steps": [
-            {"step": 0, "name": "setup", "status": "completed", "summary": "프로젝트 초기화 완료"},
-            {"step": 1, "name": "core", "status": "completed", "summary": "핵심 로직 구현"},
-            {"step": 2, "name": "ui", "status": "pending"},
-        ],
-    }
-    (d / "index.json").write_text(json.dumps(index, indent=2, ensure_ascii=False))
-    (d / "step2.md").write_text("# Step 2: UI\n\nUI를 구현하세요.")
-
-    return d
+def _git(cwd: Path, *args: str) -> str:
+    r = subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    return r.stdout
 
 
 @pytest.fixture
-def top_index(tmp_project):
-    """phases/index.json (top-level)."""
-    top = {
-        "phases": [
-            {"dir": "0-mvp", "status": "pending"},
-            {"dir": "1-polish", "status": "pending"},
-        ]
-    }
-    p = tmp_project / "phases" / "index.json"
-    p.write_text(json.dumps(top, indent=2))
-    return p
+def repo(tmp_path: Path) -> Path:
+    root = tmp_path / "main"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "commit", "-q", "--allow-empty", "-m", "init")
+    return root
 
 
 @pytest.fixture
-def executor(tmp_project, phase_dir):
-    """테스트용 StepExecutor 인스턴스. git 호출은 별도 mock 필요."""
-    with patch.object(ex, "ROOT", tmp_project):
-        inst = ex.StepExecutor("0-mvp")
-    # 내부 경로를 tmp_project 기준으로 재설정
-    inst._root = str(tmp_project)
-    inst._phases_dir = tmp_project / "phases"
-    inst._phase_dir = phase_dir
-    inst._phase_dir_name = "0-mvp"
-    inst._index_file = phase_dir / "index.json"
-    inst._top_index_file = tmp_project / "phases" / "index.json"
-    return inst
-
-
-# ---------------------------------------------------------------------------
-# _stamp (= 이전 now_iso)
-# ---------------------------------------------------------------------------
-
-class TestStamp:
-    def test_returns_kst_timestamp(self, executor):
-        result = executor._stamp()
-        assert "+0900" in result
-
-    def test_format_is_iso(self, executor):
-        result = executor._stamp()
-        dt = datetime.strptime(result, "%Y-%m-%dT%H:%M:%S%z")
-        assert dt.tzinfo is not None
-
-    def test_is_current_time(self, executor):
-        before = datetime.now(ex.StepExecutor.TZ).replace(microsecond=0)
-        result = executor._stamp()
-        after = datetime.now(ex.StepExecutor.TZ).replace(microsecond=0) + timedelta(seconds=1)
-        parsed = datetime.strptime(result, "%Y-%m-%dT%H:%M:%S%z")
-        assert before <= parsed <= after
-
-
-# ---------------------------------------------------------------------------
-# _read_json / _write_json
-# ---------------------------------------------------------------------------
-
-class TestJsonHelpers:
-    def test_roundtrip(self, tmp_path):
-        data = {"key": "값", "nested": [1, 2, 3]}
-        p = tmp_path / "test.json"
-        ex.StepExecutor._write_json(p, data)
-        loaded = ex.StepExecutor._read_json(p)
-        assert loaded == data
-
-    def test_save_ensures_ascii_false(self, tmp_path):
-        p = tmp_path / "test.json"
-        ex.StepExecutor._write_json(p, {"한글": "테스트"})
-        raw = p.read_text()
-        assert "한글" in raw
-        assert "\\u" not in raw
-
-    def test_save_indented(self, tmp_path):
-        p = tmp_path / "test.json"
-        ex.StepExecutor._write_json(p, {"a": 1})
-        raw = p.read_text()
-        assert "\n" in raw
-
-    def test_load_nonexistent_raises(self, tmp_path):
-        with pytest.raises(FileNotFoundError):
-            ex.StepExecutor._read_json(tmp_path / "nope.json")
-
-
-# ---------------------------------------------------------------------------
-# _load_guardrails
-# ---------------------------------------------------------------------------
-
-class TestLoadGuardrails:
-    def test_loads_claude_md_and_docs(self, executor, tmp_project):
-        with patch.object(ex, "ROOT", tmp_project):
-            result = executor._load_guardrails()
-        assert "# Rules" in result
-        assert "rule one" in result
-        assert "# Architecture" in result
-        assert "# Guide" in result
-
-    def test_sections_separated_by_divider(self, executor, tmp_project):
-        with patch.object(ex, "ROOT", tmp_project):
-            result = executor._load_guardrails()
-        assert "---" in result
-
-    def test_docs_sorted_alphabetically(self, executor, tmp_project):
-        with patch.object(ex, "ROOT", tmp_project):
-            result = executor._load_guardrails()
-        arch_pos = result.index("arch")
-        guide_pos = result.index("guide")
-        assert arch_pos < guide_pos
-
-    def test_no_claude_md(self, executor, tmp_project):
-        (tmp_project / "CLAUDE.md").unlink()
-        with patch.object(ex, "ROOT", tmp_project):
-            result = executor._load_guardrails()
-        assert "CLAUDE.md" not in result
-        assert "Architecture" in result
-
-    def test_no_docs_dir(self, executor, tmp_project):
-        import shutil
-        shutil.rmtree(tmp_project / "docs")
-        with patch.object(ex, "ROOT", tmp_project):
-            result = executor._load_guardrails()
-        assert "Rules" in result
-        assert "Architecture" not in result
-
-    def test_empty_project(self, tmp_path):
-        with patch.object(ex, "ROOT", tmp_path):
-            # executor가 필요 없는 static-like 동작이므로 임시 인스턴스
-            phases_dir = tmp_path / "phases" / "dummy"
-            phases_dir.mkdir(parents=True)
-            idx = {"project": "T", "phase": "t", "steps": []}
-            (phases_dir / "index.json").write_text(json.dumps(idx))
-            inst = ex.StepExecutor.__new__(ex.StepExecutor)
-            result = inst._load_guardrails()
-        assert result == ""
-
-
-# ---------------------------------------------------------------------------
-# _build_step_context
-# ---------------------------------------------------------------------------
-
-class TestBuildStepContext:
-    def test_includes_completed_with_summary(self, phase_dir):
-        index = json.loads((phase_dir / "index.json").read_text())
-        result = ex.StepExecutor._build_step_context(index)
-        assert "Step 0 (setup): 프로젝트 초기화 완료" in result
-        assert "Step 1 (core): 핵심 로직 구현" in result
-
-    def test_excludes_pending(self, phase_dir):
-        index = json.loads((phase_dir / "index.json").read_text())
-        result = ex.StepExecutor._build_step_context(index)
-        assert "ui" not in result
-
-    def test_excludes_completed_without_summary(self, phase_dir):
-        index = json.loads((phase_dir / "index.json").read_text())
-        del index["steps"][0]["summary"]
-        result = ex.StepExecutor._build_step_context(index)
-        assert "setup" not in result
-        assert "core" in result
-
-    def test_empty_when_no_completed(self):
-        index = {"steps": [{"step": 0, "name": "a", "status": "pending"}]}
-        result = ex.StepExecutor._build_step_context(index)
-        assert result == ""
-
-    def test_has_header(self, phase_dir):
-        index = json.loads((phase_dir / "index.json").read_text())
-        result = ex.StepExecutor._build_step_context(index)
-        assert result.startswith("## 이전 Step 산출물")
-
-
-# ---------------------------------------------------------------------------
-# _build_preamble
-# ---------------------------------------------------------------------------
-
-class TestBuildPreamble:
-    def test_includes_project_name(self, executor):
-        result = executor._build_preamble("", "")
-        assert "TestProject" in result
-
-    def test_includes_guardrails(self, executor):
-        result = executor._build_preamble("GUARD_CONTENT", "")
-        assert "GUARD_CONTENT" in result
-
-    def test_includes_step_context(self, executor):
-        ctx = "## 이전 Step 산출물\n\n- Step 0: done"
-        result = executor._build_preamble("", ctx)
-        assert "이전 Step 산출물" in result
-
-    def test_includes_commit_example(self, executor):
-        result = executor._build_preamble("", "")
-        assert "feat(mvp):" in result
-
-    def test_includes_rules(self, executor):
-        result = executor._build_preamble("", "")
-        assert "작업 규칙" in result
-        assert "AC" in result
-
-    def test_no_retry_section_by_default(self, executor):
-        result = executor._build_preamble("", "")
-        assert "이전 시도 실패" not in result
-
-    def test_retry_section_with_prev_error(self, executor):
-        result = executor._build_preamble("", "", prev_error="타입 에러 발생")
-        assert "이전 시도 실패" in result
-        assert "타입 에러 발생" in result
-
-    def test_includes_max_retries(self, executor):
-        result = executor._build_preamble("", "")
-        assert str(ex.StepExecutor.MAX_RETRIES) in result
-
-    def test_includes_index_path(self, executor):
-        result = executor._build_preamble("", "")
-        assert "/phases/0-mvp/index.json" in result
-
-
-# ---------------------------------------------------------------------------
-# _update_top_index
-# ---------------------------------------------------------------------------
-
-class TestUpdateTopIndex:
-    def test_completed(self, executor, top_index):
-        executor._top_index_file = top_index
-        executor._update_top_index("completed")
-        data = json.loads(top_index.read_text())
-        mvp = next(p for p in data["phases"] if p["dir"] == "0-mvp")
-        assert mvp["status"] == "completed"
-        assert "completed_at" in mvp
-
-    def test_error(self, executor, top_index):
-        executor._top_index_file = top_index
-        executor._update_top_index("error")
-        data = json.loads(top_index.read_text())
-        mvp = next(p for p in data["phases"] if p["dir"] == "0-mvp")
-        assert mvp["status"] == "error"
-        assert "failed_at" in mvp
-
-    def test_blocked(self, executor, top_index):
-        executor._top_index_file = top_index
-        executor._update_top_index("blocked")
-        data = json.loads(top_index.read_text())
-        mvp = next(p for p in data["phases"] if p["dir"] == "0-mvp")
-        assert mvp["status"] == "blocked"
-        assert "blocked_at" in mvp
-
-    def test_other_phases_unchanged(self, executor, top_index):
-        executor._top_index_file = top_index
-        executor._update_top_index("completed")
-        data = json.loads(top_index.read_text())
-        polish = next(p for p in data["phases"] if p["dir"] == "1-polish")
-        assert polish["status"] == "pending"
-
-    def test_nonexistent_dir_is_noop(self, executor, top_index):
-        executor._top_index_file = top_index
-        executor._phase_dir_name = "no-such-dir"
-        original = json.loads(top_index.read_text())
-        executor._update_top_index("completed")
-        after = json.loads(top_index.read_text())
-        for p_before, p_after in zip(original["phases"], after["phases"]):
-            assert p_before["status"] == p_after["status"]
-
-    def test_no_top_index_file(self, executor, tmp_path):
-        executor._top_index_file = tmp_path / "nonexistent.json"
-        executor._update_top_index("completed")  # should not raise
-
-
-# ---------------------------------------------------------------------------
-# _checkout_branch (mocked)
-# ---------------------------------------------------------------------------
-
-class TestCheckoutBranch:
-    def _mock_git(self, executor, responses):
-        call_idx = {"i": 0}
-        def fake_git(*args):
-            idx = call_idx["i"]
-            call_idx["i"] += 1
-            if idx < len(responses):
-                return responses[idx]
-            return MagicMock(returncode=0, stdout="", stderr="")
-        executor._run_git = fake_git
-
-    def test_already_on_branch(self, executor):
-        self._mock_git(executor, [
-            MagicMock(returncode=0, stdout="feat-mvp\n", stderr=""),
-        ])
-        executor._checkout_branch()  # should return without checkout
-
-    def test_branch_exists_checkout(self, executor):
-        self._mock_git(executor, [
-            MagicMock(returncode=0, stdout="main\n", stderr=""),
-            MagicMock(returncode=0, stdout="", stderr=""),
-            MagicMock(returncode=0, stdout="", stderr=""),
-        ])
-        executor._checkout_branch()
-
-    def test_branch_not_exists_create(self, executor):
-        self._mock_git(executor, [
-            MagicMock(returncode=0, stdout="main\n", stderr=""),
-            MagicMock(returncode=1, stdout="", stderr="not found"),
-            MagicMock(returncode=0, stdout="", stderr=""),
-        ])
-        executor._checkout_branch()
-
-    def test_checkout_fails_exits(self, executor):
-        self._mock_git(executor, [
-            MagicMock(returncode=0, stdout="main\n", stderr=""),
-            MagicMock(returncode=1, stdout="", stderr=""),
-            MagicMock(returncode=1, stdout="", stderr="dirty tree"),
-        ])
-        with pytest.raises(SystemExit) as exc_info:
-            executor._checkout_branch()
-        assert exc_info.value.code == 1
-
-    def test_no_git_exits(self, executor):
-        self._mock_git(executor, [
-            MagicMock(returncode=1, stdout="", stderr="not a git repo"),
-        ])
-        with pytest.raises(SystemExit) as exc_info:
-            executor._checkout_branch()
-        assert exc_info.value.code == 1
-
-
-# ---------------------------------------------------------------------------
-# _commit_step (mocked)
-# ---------------------------------------------------------------------------
-
-class TestCommitStep:
-    def test_two_phase_commit(self, executor):
-        calls = []
-        def fake_git(*args):
-            calls.append(args)
-            if args[:2] == ("diff", "--cached"):
-                return MagicMock(returncode=1)
-            return MagicMock(returncode=0, stdout="", stderr="")
-        executor._run_git = fake_git
-
-        executor._commit_step(2, "ui")
-
-        commit_calls = [c for c in calls if c[0] == "commit"]
-        assert len(commit_calls) == 2
-        assert "feat(mvp):" in commit_calls[0][2]
-        assert "chore(mvp):" in commit_calls[1][2]
-
-    def test_no_code_changes_skips_feat_commit(self, executor):
-        call_count = {"diff": 0}
-        calls = []
-        def fake_git(*args):
-            calls.append(args)
-            if args[:2] == ("diff", "--cached"):
-                call_count["diff"] += 1
-                if call_count["diff"] == 1:
-                    return MagicMock(returncode=0)
-                return MagicMock(returncode=1)
-            return MagicMock(returncode=0, stdout="", stderr="")
-        executor._run_git = fake_git
-
-        executor._commit_step(2, "ui")
-
-        commit_msgs = [c[2] for c in calls if c[0] == "commit"]
-        assert len(commit_msgs) == 1
-        assert "chore" in commit_msgs[0]
-
-
-# ---------------------------------------------------------------------------
-# _invoke_claude (mocked)
-# ---------------------------------------------------------------------------
-
-class TestInvokeClaude:
-    def test_invokes_claude_with_correct_args(self, executor):
-        mock_result = MagicMock(returncode=0, stdout='{"result": "ok"}', stderr="")
-        step = {"step": 2, "name": "ui"}
-        preamble = "PREAMBLE\n"
-
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            output = executor._invoke_claude(step, preamble)
-
-        cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "claude"
-        assert "-p" in cmd
-        assert "--dangerously-skip-permissions" in cmd
-        assert "--output-format" in cmd
-        assert "PREAMBLE" in cmd[-1]
-        assert "UI를 구현하세요" in cmd[-1]
-
-    def test_saves_output_json(self, executor):
-        mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
-        step = {"step": 2, "name": "ui"}
-
-        with patch("subprocess.run", return_value=mock_result):
-            executor._invoke_claude(step, "preamble")
-
-        output_file = executor._phase_dir / "step2-output.json"
-        assert output_file.exists()
-        data = json.loads(output_file.read_text())
-        assert data["step"] == 2
-        assert data["name"] == "ui"
-        assert data["exitCode"] == 0
-
-    def test_nonexistent_step_file_exits(self, executor):
-        step = {"step": 99, "name": "nonexistent"}
-        with pytest.raises(SystemExit) as exc_info:
-            executor._invoke_claude(step, "preamble")
-        assert exc_info.value.code == 1
-
-    def test_timeout_is_1800(self, executor):
-        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
-        step = {"step": 2, "name": "ui"}
-
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            executor._invoke_claude(step, "preamble")
-
-        assert mock_run.call_args[1]["timeout"] == 1800
-
-
-# ---------------------------------------------------------------------------
-# progress_indicator (= 이전 Spinner)
-# ---------------------------------------------------------------------------
-
-class TestProgressIndicator:
-    def test_context_manager(self):
-        import time
-        with ex.progress_indicator("test") as pi:
-            time.sleep(0.15)
-        assert pi.elapsed >= 0.1
-
-    def test_elapsed_increases(self):
-        import time
-        with ex.progress_indicator("test") as pi:
-            time.sleep(0.2)
-        assert pi.elapsed > 0
-
-
-# ---------------------------------------------------------------------------
-# main() CLI 파싱 (mocked)
-# ---------------------------------------------------------------------------
-
-class TestMainCli:
-    def test_no_args_exits(self):
-        with patch("sys.argv", ["execute.py"]):
-            with pytest.raises(SystemExit) as exc_info:
-                ex.main()
-            assert exc_info.value.code == 2  # argparse exits with 2
-
-    def test_invalid_phase_dir_exits(self):
-        with patch("sys.argv", ["execute.py", "nonexistent"]):
-            with patch.object(ex, "ROOT", Path("/tmp/fake_nonexistent")):
-                with pytest.raises(SystemExit) as exc_info:
-                    ex.main()
-                assert exc_info.value.code == 1
-
-    def test_missing_index_exits(self, tmp_project):
-        (tmp_project / "phases" / "empty").mkdir()
-        with patch("sys.argv", ["execute.py", "empty"]):
-            with patch.object(ex, "ROOT", tmp_project):
-                with pytest.raises(SystemExit) as exc_info:
-                    ex.main()
-                assert exc_info.value.code == 1
-
-
-# ---------------------------------------------------------------------------
-# _check_blockers (= 이전 main() error/blocked 체크)
-# ---------------------------------------------------------------------------
-
-class TestCheckBlockers:
-    def _make_executor_with_steps(self, tmp_project, steps):
-        d = tmp_project / "phases" / "test-phase"
-        d.mkdir(exist_ok=True)
-        index = {"project": "T", "phase": "test", "steps": steps}
-        (d / "index.json").write_text(json.dumps(index))
-
-        with patch.object(ex, "ROOT", tmp_project):
-            inst = ex.StepExecutor.__new__(ex.StepExecutor)
-        inst._root = str(tmp_project)
-        inst._phases_dir = tmp_project / "phases"
-        inst._phase_dir = d
-        inst._phase_dir_name = "test-phase"
-        inst._index_file = d / "index.json"
-        inst._top_index_file = tmp_project / "phases" / "index.json"
-        inst._phase_name = "test"
-        inst._total = len(steps)
-        return inst
-
-    def test_error_step_exits_1(self, tmp_project):
-        steps = [
-            {"step": 0, "name": "ok", "status": "completed"},
-            {"step": 1, "name": "bad", "status": "error", "error_message": "fail"},
-        ]
-        inst = self._make_executor_with_steps(tmp_project, steps)
-        with pytest.raises(SystemExit) as exc_info:
-            inst._check_blockers()
-        assert exc_info.value.code == 1
-
-    def test_blocked_step_exits_2(self, tmp_project):
-        steps = [
-            {"step": 0, "name": "ok", "status": "completed"},
-            {"step": 1, "name": "stuck", "status": "blocked", "blocked_reason": "API key"},
-        ]
-        inst = self._make_executor_with_steps(tmp_project, steps)
-        with pytest.raises(SystemExit) as exc_info:
-            inst._check_blockers()
-        assert exc_info.value.code == 2
+def phase(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """phases/demo 에 step 0 하나짜리 index 를 만든 StepExecutor."""
+    root = tmp_path / "proj"
+    (root / "phases" / "demo").mkdir(parents=True)
+    (root / "phases" / "demo" / "index.json").write_text(
+        json.dumps(
+            {
+                "project": "데모",
+                "phase": "demo",
+                "steps": [{"step": 0, "name": "setup", "status": "pending"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(execute, "ROOT", root)
+    ex = execute.StepExecutor("demo")
+    monkeypatch.setattr(ex, "_commit_step", lambda *a: None)
+    monkeypatch.setattr(ex, "_update_top_index", lambda *a: None)
+    return ex
+
+
+def _fake_claude(ex: execute.StepExecutor, **fields):
+    def run(step, preamble):
+        idx = ex._read_json(ex._index_file)
+        idx["steps"][0].update(fields)
+        ex._write_json(ex._index_file, idx)
+
+    return run
+
+
+# --- utf-8 · 가드레일 문서 ---
+
+
+def test_guardrails_read_utf8_and_only_existing_docs(phase):
+    root = execute.ROOT
+    (root / "CLAUDE.md").write_bytes("# 규칙: 삭제하지 않는다".encode())
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "PRD.md").write_bytes("문서 지도".encode())
+    (root / "docs" / "DESIGN.md").write_text("넣지 않음", encoding="utf-8")
+
+    g = phase._load_guardrails()
+
+    assert "규칙: 삭제하지 않는다" in g and "문서 지도" in g
+    assert "넣지 않음" not in g  # docs 전체가 아니라 정한 색인만
+
+
+# --- worktree 강제 ---
+
+
+def test_refuses_main_checkout_and_non_git(repo, tmp_path):
+    assert "메인 체크아웃" in execute.worktree_error(repo)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert execute.worktree_error(plain) is not None
+
+
+def test_allows_linked_worktree(repo, tmp_path):
+    wt = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", str(wt), "-b", "feat-demo")
+    assert execute.worktree_error(wt) is None
+
+
+def test_run_exits_before_anything_in_main_checkout(phase, monkeypatch):
+    monkeypatch.setattr(execute, "worktree_error", lambda cwd: "ERROR: 메인 체크아웃")
+    monkeypatch.setattr(phase, "_print_header", lambda: pytest.fail("헤더까지 가면 안 된다"))
+    with pytest.raises(SystemExit) as e:
+        phase.run()
+    assert e.value.code == 1
+
+
+# --- 슬롯 점유 · 재사용 브랜치 ---
+
+
+@pytest.fixture
+def slot_phase(repo, tmp_path, monkeypatch):
+    phase_dir = repo / "phases" / "demo"
+    phase_dir.mkdir(parents=True)
+    (phase_dir / "index.json").write_text(
+        json.dumps(
+            {
+                "phase": "demo",
+                "issue": 756,
+                "steps": [{"step": 0, "name": "setup", "status": "pending"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (phase_dir / "step0.md").write_text("docs/spec.md", encoding="utf-8")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "spec.md").write_text("spec", encoding="utf-8")
+    (repo / ".gitignore").write_text(".slot-lock\n", encoding="utf-8")
+    _git(
+        repo, "add", "phases/demo/index.json", "phases/demo/step0.md", "docs/spec.md", ".gitignore"
+    )
+    _git(repo, "commit", "-q", "-m", "phase fixture")
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "clone", "-q", "--bare", str(repo), str(origin))
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "fetch", "origin")
+    base = tmp_path / "slots"
+    root = base / "mall-front"
+    _git(repo, "worktree", "add", "-q", "-b", "previous", str(root), "origin/main")
+    monkeypatch.setattr(execute, "ROOT", root)
+    monkeypatch.setattr(execute, "WORKTREE_BASE", base)
+    ex = execute.StepExecutor("demo")
+    monkeypatch.setattr(ex, "_commit_step", lambda *a: None)
+    return ex
+
+
+@pytest.mark.parametrize("failure_at", ["_invoke_claude", "_finalize"])
+@pytest.mark.parametrize("error", [RuntimeError("step failed"), SystemExit(2)])
+def test_slot_released_even_when_execution_or_finalize_raises(
+    slot_phase, monkeypatch, failure_at, error
+):
+    root = Path(slot_phase._root)
+
+    def fail(*args):
+        lock = slot.read_lock(root)
+        assert lock is not None
+        assert (lock["issue"], lock["phase"], lock["pid"]) == (756, "demo", os.getpid())
+        raise error
+
+    monkeypatch.setattr(slot_phase, "_invoke_claude", _fake_claude(slot_phase, status="completed"))
+    monkeypatch.setattr(slot_phase, failure_at, fail)
+    with pytest.raises(type(error)) as caught:
+        slot_phase.run()
+    assert caught.value is error
+    assert not (root / slot.LOCK).exists()
+
+
+def test_live_slot_owner_blocks_all_steps(slot_phase, monkeypatch, capsys):
+    root = Path(slot_phase._root)
+    # The parent process remains alive for this test and differs from the harness PID.
+    owner = os.getppid()
+    assert owner != os.getpid() and slot.pid_alive(owner)
+    slot.acquire(root.name, issue=755, phase="previous", pid=owner, repo=root, base=root.parent)
+    before = (root / slot.LOCK).read_bytes()
+    index_before = slot_phase._index_file.read_bytes()
+    monkeypatch.setattr(
+        slot_phase, "_invoke_claude", lambda *a: pytest.fail("occupied slot ran a step")
+    )
+    try:
+        with pytest.raises(SystemExit) as caught:
+            slot_phase.run()
+        assert caught.value.code == 1
+        assert "occupied" in capsys.readouterr().out
+        assert (root / slot.LOCK).read_bytes() == before
+        assert slot_phase._index_file.read_bytes() == index_before
+        assert _git(root, "branch", "--show-current").strip() == "previous"
+    finally:
+        slot.release(root.name, pid=owner, base=root.parent)
+
+
+def test_new_branch_starts_at_fetched_origin_main_not_previous_head(slot_phase, repo):
+    root = Path(slot_phase._root)
+    _git(root, "commit", "-q", "--allow-empty", "-m", "previous work")
+    previous = _git(root, "rev-parse", "HEAD")
+    # Advance only the local remote so omitting fetch also fails this regression.
+    origin = Path(_git(repo, "remote", "get-url", "origin").strip())
+    tip = _git(origin, "commit-tree", "main^{tree}", "-p", "main", "-m", "new main").strip()
+    _git(origin, "update-ref", "refs/heads/main", tip)
+
+    slot_phase._checkout_branch()
+
+    assert _git(root, "branch", "--show-current").strip() == "feat-demo"
+    assert _git(root, "rev-parse", "HEAD").strip() == tip
+    assert _git(root, "rev-parse", "HEAD") != previous
+    assert _git(root, "rev-parse", "previous") == previous
+
+
+def test_failed_fetch_does_not_create_branch_from_stale_main(slot_phase, repo, tmp_path):
+    root = Path(slot_phase._root)
+    _git(repo, "remote", "set-url", "origin", str(tmp_path / "missing-origin.git"))
+    with pytest.raises(SystemExit) as caught:
+        slot_phase._checkout_branch()
+    assert caught.value.code == 1
+    assert _git(root, "branch", "--show-current").strip() == "previous"
+    assert not _git(root, "branch", "--list", "feat-demo").strip()
+
+
+@pytest.mark.parametrize("valid_name", [False, True])
+def test_non_slot_worktree_warns_and_still_runs(slot_phase, repo, monkeypatch, capsys, valid_name):
+    root = Path(slot_phase._root)
+    if valid_name:
+        # A valid name outside WORKTREE_BASE is still not a managed slot.
+        monkeypatch.setattr(execute, "WORKTREE_BASE", root.parent / "elsewhere")
+    else:
+        legacy = root.parent / "old-phase"
+        _git(repo, "worktree", "add", "-q", "-b", "legacy", str(legacy), "origin/main")
+        monkeypatch.setattr(execute, "ROOT", legacy)
+        slot_phase = execute.StepExecutor("demo")
+        monkeypatch.setattr(slot_phase, "_commit_step", lambda *a: None)
+    monkeypatch.setattr(slot_phase, "_invoke_claude", _fake_claude(slot_phase, status="completed"))
+    monkeypatch.setattr(slot_phase, "_finalize", lambda: None)
+    slot_phase.run()
+    assert slot_phase._read_json(slot_phase._index_file)["steps"][0]["status"] == "completed"
+    assert capsys.readouterr().out.count("WARN: 슬롯 밖 worktree") == 1
+    assert not (Path(slot_phase._root) / slot.LOCK).exists()
+
+
+# --- 근거 강제: 이슈 번호 · docs 근거 ---
+
+
+def test_refuses_phase_without_issue_number(phase):
+    (phase._phase_dir / "step0.md").write_text("- /docs/specs/login.md", encoding="utf-8")
+    err = execute.evidence_error(phase._phase_dir, execute.StepExecutor.GUARDRAIL_DOCS)
+    assert err and "이슈 번호" in err
+
+
+def test_refuses_phase_without_steps(phase):
+    f = phase._phase_dir / "index.json"
+    f.write_text(json.dumps({"phase": "demo", "issue": 1, "steps": []}), encoding="utf-8")
+    err = execute.evidence_error(phase._phase_dir, execute.StepExecutor.GUARDRAIL_DOCS)
+    assert err and "steps 가 비었다" in err
+
+
+def test_refuses_step_without_docs_evidence(phase):
+    idx = phase._read_json(phase._index_file)
+    phase._write_json(phase._index_file, {**idx, "issue": 151})
+    step = phase._phase_dir / "step0.md"
+    spec = execute.ROOT / "docs" / "specs" / "login.md"
+    for rel in ("docs/PRD.md", "docs/ROADMAP.md"):
+        (execute.ROOT / rel).parent.mkdir(parents=True, exist_ok=True)
+        (execute.ROOT / rel).write_text("x", encoding="utf-8")
+    step.write_text("- /CLAUDE.md\n- /docs/PRD.md\n- /docs/ROADMAP.md", encoding="utf-8")
+    err = execute.evidence_error(phase._phase_dir, execute.StepExecutor.GUARDRAIL_DOCS)
+    assert err and "step0.md" in err  # 가드레일·진행 문서만으로는 근거가 아니다
+    step.write_text("- /docs/PRD.md\n- /docs/specs/login.md", encoding="utf-8")
+    err = execute.evidence_error(phase._phase_dir, execute.StepExecutor.GUARDRAIL_DOCS)
+    assert err and "step0.md" in err  # 레포에 없는 경로(지어낸 근거)는 근거가 아니다
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text("화면 명세", encoding="utf-8")
+    assert execute.evidence_error(phase._phase_dir, execute.StepExecutor.GUARDRAIL_DOCS) is None
+
+
+# --- 금지 목록 ---
+
+
+def test_forbidden_list_prepended_to_every_step_prompt(phase):
+    pre = phase._build_preamble("가드레일", "", prev_error="이전 에러")
+    assert pre.startswith(execute.FORBIDDEN)
+    for item in ("운영 DB 쓰기", "마이그레이션 적용", "머지", "push", "git add -A", ".env"):
+        assert item in execute.FORBIDDEN
+
+
+# --- 커밋: 이름으로만 add ---
+
+
+def test_stage_adds_by_name_never_dash_a_and_skips_secrets(repo, monkeypatch):
+    for rel in (
+        "a.py",
+        "한글.md",
+        ".env",
+        ".env.local",
+        "apps/api/.env.production.local",
+        ".env.example",
+        "apps/web/.env.mock",
+        "logs/x.log",
+        "pkg/__pycache__/c.pyc",
+        "web/node_modules/m.js",
+        ".claude/audit.jsonl",
+        "phases/demo/index.json",
+    ):
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(execute, "ROOT", repo)
+    ex = execute.StepExecutor.__new__(execute.StepExecutor)
+    ex._root = str(repo)
+    calls = []
+    real = ex._run_git
+    monkeypatch.setattr(ex, "_run_git", lambda *a: calls.append(a) or real(*a))
+
+    ex._stage_changes("phases/demo/index.json")
+
+    staged = _git(repo, "-c", "core.quotepath=false", "diff", "--cached", "--name-only").split()
+    # 비밀 .env 는 빠지고, 커밋된 예시·mock 파일은 들어간다
+    assert sorted(staged) == [".env.example", "a.py", "apps/web/.env.mock", "한글.md"]
+    adds = [c for c in calls if c[0] == "add"]
+    assert adds and all(c[1] == "--" and "-A" not in c and "." not in c for c in adds)
+
+
+# --- 상태 전이 ---
+
+
+def test_completed_records_timestamp(phase, monkeypatch):
+    monkeypatch.setattr(
+        phase, "_invoke_claude", _fake_claude(phase, status="completed", summary="뼈대")
+    )
+    assert phase._execute_single_step({"step": 0, "name": "setup"}, "") is True
+    s = phase._read_json(phase._index_file)["steps"][0]
+    assert s["status"] == "completed" and "completed_at" in s
+
+
+def test_blocked_exits_2(phase, monkeypatch):
+    monkeypatch.setattr(
+        phase, "_invoke_claude", _fake_claude(phase, status="blocked", blocked_reason="API 키")
+    )
+    with pytest.raises(SystemExit) as e:
+        phase._execute_single_step({"step": 0, "name": "setup"}, "")
+    assert e.value.code == 2
+    assert "blocked_at" in phase._read_json(phase._index_file)["steps"][0]
+
+
+def test_error_retries_then_exits_1(phase, monkeypatch):
+    calls = []
+
+    def fail(step, preamble):
+        calls.append(preamble)
+        _fake_claude(phase, status="error", error_message="테스트 실패")(step, preamble)
+
+    monkeypatch.setattr(phase, "_invoke_claude", fail)
+    with pytest.raises(SystemExit) as e:
+        phase._execute_single_step({"step": 0, "name": "setup"}, "")
+    assert e.value.code == 1 and len(calls) == execute.StepExecutor.MAX_RETRIES
+    assert "테스트 실패" in calls[1]  # 이전 에러를 다음 시도에 넘긴다
+    s = phase._read_json(phase._index_file)["steps"][0]
+    assert s["status"] == "error" and "failed_at" in s
+
+
+# --- 엔진 호출 ---
+
+
+def _grandchild_engine(sleep_s: int) -> list[str]:
+    """출력은 바로 끝내지만 stdout 을 물려받은 손자가 sleep_s 초 남는 엔진(Gradle 데몬 흉내)."""
+    code = (
+        "import subprocess,sys;"
+        f"subprocess.Popen([sys.executable,'-c','import time;time.sleep({sleep_s})']);"
+        "print('done')"
+    )
+    return [sys.executable, "-c", code]
+
+
+def test_invoke_returns_when_grandchild_holds_stdout(phase, monkeypatch):
+    # 깨지면: 엔진이 띄운 Gradle 데몬이 파이프를 물어 하네스가 영영 멈춘다
+    # (실측 31분 멈춤).
+    monkeypatch.setitem(execute.ENGINES, "claude", _grandchild_engine(20))
+    (phase._phase_dir / "step0.md").write_text("x", encoding="utf-8")
+    t = time.monotonic()
+    out = phase._invoke_claude({"step": 0, "name": "setup"}, "")
+    assert time.monotonic() - t < 10
+    assert out["exitCode"] == 0 and "done" in out["stdout"]
+
+
+def test_invoke_timeout_records_error_instead_of_crashing(phase, monkeypatch):
+    # 깨지면: 시간 초과가 TimeoutExpired 로 하네스 전체를 죽이고 index 기록·재시도가 안 된다.
+    sleeper = [sys.executable, "-c", "import time;time.sleep(30)"]
+    monkeypatch.setitem(execute.ENGINES, "claude", sleeper)
+    monkeypatch.setattr(execute, "ENGINE_TIMEOUT_S", 1)
+    (phase._phase_dir / "step0.md").write_text("x", encoding="utf-8")
+    out = phase._invoke_claude({"step": 0, "name": "setup"}, "")
+    assert out["exitCode"] != 0 and "timeout" in out["stderr"]
+
+
+def test_compact_codex_keeps_failure_events():
+    # 깨지면: 축소된 codex step 출력에서 실패 원인이 사라져 재시도·진단을 못 한다.
+    noise = json.dumps({"type": "item.completed", "item": {"type": "command_execution"}})
+    error = json.dumps({"type": "error", "message": "stream disconnected"})
+    failed = json.dumps({"type": "turn.failed", "error": {"message": "quota exceeded"}})
+    out = execute._compact_codex("\n".join([noise, error, noise, failed]), 0)
+    assert out.splitlines() == [error, failed]  # 정상 종료면 원문 꼬리 없이 실패 줄만
+    assert "[harness] raw tail:" in execute._compact_codex(noise, 1)
+
+
+def test_engine_killed_before_exception_escapes(monkeypatch: pytest.MonkeyPatch):
+    """깨지면 Ctrl+C 뒤 슬롯 잠금이 풀린 채 엔진이 계속 써서 다음 줄기와 같은 checkout 을 덮는다."""
+    killed = []
+
+    class Proc:
+        pid = 1
+
+        def wait(self, timeout=None):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(execute.subprocess, "Popen", lambda *a, **k: Proc())
+    monkeypatch.setattr(execute, "_kill_tree", killed.append)
+    with pytest.raises(KeyboardInterrupt):
+        execute._run_engine(["engine"], "prompt", ".")
+    assert len(killed) == 1
