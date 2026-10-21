@@ -5,7 +5,7 @@
 | 확인 | 결과 |
 |---|---|
 | 변경 전 기존 전체 테스트 | 91 passed |
-| 최종 scripts/ 전체 테스트 | 113 passed, 1 skipped (POSIX Git 실행 권한 테스트) |
+| 최종 scripts/ 전체 테스트 | 114 passed, 1 skipped (POSIX Git 실행 권한 테스트) |
 | 수정 Python 파일 Ruff 검사 | passed |
 | git diff --check | passed |
 | 독립 설치본 전체 테스트 (첫 설치 검증) | 112 passed (이후 플랫폼 수정은 원본 전체 테스트로 재검증) |
@@ -17,7 +17,7 @@
 
 ```sh
 uv run --no-project --with pytest python -m pytest scripts/ -q
-uv run --no-project --with ruff python -m ruff check scripts/project.py scripts/test_project.py scripts/execute.py scripts/test_execute.py scripts/test_hooks.py .claude/hooks/block_dangerous.py
+uv run --no-project --with ruff python -m ruff check scripts/project.py scripts/test_project.py scripts/execute.py scripts/test_execute.py scripts/test_hooks.py scripts/hooks/tdd_guard.py .claude/hooks/block_dangerous.py
 git diff --check
 ```
 
@@ -34,3 +34,6 @@ CI는 Ubuntu/Windows Python 3.11에서 전체 테스트를 실행한다. 로컬 
 프로젝트별 설정 harness.json, 슬롯·상태 조회·Baden 구현은 기존 바이트를 유지한다.
 실제 유료 에이전트 실행, 배포·운영 DB, 외부 도구/MCP의 전체 권한은 검증하지 않았다.
 무인 실행에서 거절되는 권한은 SAFETY.md에 따라 검토 후 해결한다.
+
+Windows Python 3.11 CI의 cp1252 환경에서 발견한 한글 JSON 출력 오류를 재현 테스트로 추가하고 수정했다.
+settings 테스트 파일 읽기도 UTF-8로 명시했다. 변경 후 전체 테스트와 정적 검사를 다시 통과했다.

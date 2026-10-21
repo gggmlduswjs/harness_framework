@@ -28,7 +28,7 @@ def test_dangerous_hook_fails_closed_on_invalid_input(payload):
 
 
 def test_secret_file_guard_covers_write_and_edit_tools():
-    settings = json.loads((ROOT / ".claude/settings.json").read_text())
+    settings = json.loads((ROOT / ".claude/settings.json").read_text(encoding="utf-8"))
     guards = [entry for entry in settings["hooks"]["PreToolUse"]
               if any("block_dangerous.py" in hook["command"] for hook in entry["hooks"])]
     assert any({"Read", "Edit", "Write"} <= set(g["matcher"].split("|")) for g in guards)
@@ -159,6 +159,11 @@ def _tdd_denies(proj: Path, tool_input: dict, enabled: bool = True) -> bool:
     )
     assert r.returncode == 0, r.stderr
     return '"permissionDecision": "deny"' in r.stdout
+
+
+def test_tdd_guard_protocol_survives_non_utf8_stdout(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1252:strict")
+    assert _tdd_denies(tmp_path, {"file_path": str(tmp_path / "src/app/order/service.py")})
 
 
 def test_tdd_guard_denies_without_exact_test(tmp_path):
