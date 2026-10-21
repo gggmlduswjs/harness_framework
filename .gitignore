@@ -17,3 +17,6 @@ __pycache__/
 .claude/audit.jsonl
 .claude/.handoff-stamp
 .claude/current-issue
+
+# 서브에이전트 worktree(Claude Code isolation: worktree)
+.claude/worktrees/
