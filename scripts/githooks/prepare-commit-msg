@@ -1,0 +1,5 @@
+#!/bin/sh
+# Baden-Task 트레일러 — 실제 일은 scripts/baden_tasks.py. 실패해도 커밋은 막지 않는다.
+# 설치: SessionStart 훅이 core.hooksPath 를 scripts/githooks 로 둔다(비어 있을 때만).
+uv run --no-project --quiet python "$(git rev-parse --show-toplevel)/scripts/baden_tasks.py" commit-msg "$1" || true
+exit 0

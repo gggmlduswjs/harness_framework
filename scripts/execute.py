@@ -35,6 +35,7 @@ import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import baden_tasks
 import harness_config
 import slot
 
@@ -366,6 +367,9 @@ class StepExecutor:
             except (OSError, RuntimeError, ValueError) as error:
                 print(f"ERROR: {error}")
                 sys.exit(1)
+        # 이 실행 중 커밋에 Baden-Task 트레일러(prepare-commit-msg)
+        with contextlib.suppress(Exception):
+            baden_tasks.add(self._task_id, self._root)
         try:
             self._print_header()
             self._check_blockers()
@@ -375,6 +379,8 @@ class StepExecutor:
             self._execute_all_steps(guardrails)
             self._finalize()
         finally:
+            with contextlib.suppress(Exception):
+                baden_tasks.remove(self._task_id, self._root)
             if slot_name is not None:
                 slot.release(slot_name, pid=pid, base=base)
 

@@ -7,6 +7,15 @@
   "hooks": {
     "SessionStart": [
       {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --quiet python \"$CLAUDE_PROJECT_DIR/scripts/baden_tasks.py\" install || exit 0"
+          }
+        ]
+      },
+      {
         "matcher": "compact",
         "hooks": [
           {
@@ -37,6 +46,15 @@
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "mcp__baden__baden_start_task|mcp__baden__baden_complete_task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --quiet python \"$CLAUDE_PROJECT_DIR/scripts/baden_tasks.py\" hook || exit 0"
+          }
+        ]
+      },
       {
         "matcher": "",
         "hooks": [
