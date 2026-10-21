@@ -1,6 +1,6 @@
 # PLAN — {{feature}}
 
-Status: draft. 계약: [SPEC](SPEC.md). Issue: #{{issue}}
+Status: draft. 계약: [SPEC]({{spec}}). Issue: #{{issue}}
 
 ## 구현 접근과 대안
 선택한 방법 / 다른 방법을 택하지 않은 이유 / 의존성: 미정

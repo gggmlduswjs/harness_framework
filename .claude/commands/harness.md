@@ -2,7 +2,7 @@
 
 > 원본: bigsix .claude/commands/harness.md
 >
-> 산출물은 `phases/`에 둔다. 공통 흐름과 템플릿은 `docs/WORKFLOW.md`, 권한 정책은 `docs/SAFETY.md`를 따른다. execute.py는 승인·샌드박스를 우회하지 않으며, 권한 부족은 blocked/error로 처리한다. **메인 체크아웃에서는 거절**한다 — `harness.json`의 슬롯을 준비한 뒤 실행한다. 변경한 파일만 이름으로 add해 커밋한다. 하네스를 고치면 `uv run --no-project --with pytest python -m pytest scripts/ -q`를 green으로 유지한다.
+> 산출물은 `phases/`에 둔다. 공통 흐름과 템플릿은 `docs/WORKFLOW.md` (설치본: `templates/guides/WORKFLOW.md`), 권한 정책은 `docs/SAFETY.md` (설치본: `templates/guides/SAFETY.md`)를 따른다. execute.py는 승인·샌드박스를 우회하지 않으며, 권한 부족은 blocked/error로 처리한다. **메인 체크아웃에서는 거절**한다 — `harness.json`의 슬롯을 준비한 뒤 실행한다. 변경한 파일만 이름으로 add해 커밋한다. 하네스를 고치면 `uv run --no-project --with pytest python -m pytest scripts/ -q`를 green으로 유지한다.
 
 ---
 

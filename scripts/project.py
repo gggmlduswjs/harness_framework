@@ -47,11 +47,15 @@ def bundle() -> dict[Path, bytes]:
                  "skills/briefing/SKILL.md"):
         relative = Path(".claude") / name
         files[relative] = (PACKAGE / relative).read_bytes()
-    for p in (PACKAGE / "templates/project").rglob("*"):
-        if p.is_file():
-            files[p.relative_to(PACKAGE / "templates/project")] = p.read_bytes()
+    for name in ("PRD.md", "ROADMAP.md", "ARCHITECTURE.md"):
+        relative = Path("docs") / name
+        files[relative] = (PACKAGE / "templates/project" / relative).read_bytes()
+    # Keep reference guides with reusable assets, not the three project documents.
     for name in ("WORKFLOW.md", "SAFETY.md"):
-        files[Path("docs") / name] = (PACKAGE / "docs" / name).read_bytes()
+        source = PACKAGE / "templates/guides" / name
+        if not source.is_file():
+            source = PACKAGE / "docs" / name
+        files[Path("templates/guides") / name] = source.read_bytes()
     return files
 
 
@@ -78,7 +82,7 @@ def write_missing(root: Path, files: dict[Path, bytes], apply: bool) -> None:
                 path.chmod(path.stat().st_mode | 0o111)
 
 
-def feature(root: Path, slug: str, issue: int, apply: bool) -> None:
+def feature(root: Path, slug: str, issue: int, apply: bool, detailed: bool = False) -> None:
     if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", slug) or len(slug) > 64:
         raise ValueError("feature name must be a lowercase portable slug (max 64)")
     if slug in {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
@@ -87,8 +91,10 @@ def feature(root: Path, slug: str, issue: int, apply: bool) -> None:
     if issue <= 0:
         raise ValueError("issue must be positive")
     feature_dir = safe_path(root, Path("docs/specs") / slug)
+    spec = Path("docs/specs") / f"SPEC-{slug}.md"
+    spec_path = safe_path(root, spec)
     phase_dir = safe_path(root, Path("phases") / slug)
-    if feature_dir.exists() or phase_dir.exists():
+    if spec_path.exists() or feature_dir.exists() or phase_dir.exists():
         raise ValueError("feature already exists; choose a new slug or edit it manually")
     index_path = safe_path(root, Path("phases/index.json"))
     index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {"phases": []}
@@ -99,10 +105,29 @@ def feature(root: Path, slug: str, issue: int, apply: bool) -> None:
     if any(p["dir"] == slug for p in index["phases"]):
         raise ValueError("phase already indexed")
     files = {}
-    for p in (PACKAGE / "templates/feature").glob("*.md"):
-        content = p.read_text(encoding="utf-8").replace("{{feature}}", slug)
-        content = content.replace("{{issue}}", str(issue))
-        files[Path("docs/specs") / slug / p.name] = content.encode("utf-8")
+    template = PACKAGE / "templates/feature"
+    names = ["SPEC.md"]
+    if detailed:
+        names += ["PLAN.md", "TASKS.md", "VERIFICATION.md", "RETROSPECTIVE.md"]
+    for name in names:
+        content = (template / name).read_text(encoding="utf-8")
+        content = content.replace("{{feature}}", slug).replace("{{issue}}", str(issue))
+        content = content.replace("{{spec}}", f"../SPEC-{slug}.md")
+        if name == "SPEC.md":
+            if detailed:
+                content += (f"\n## 상세 문서\n\n[PLAN]({slug}/PLAN.md) / "
+                            f"[TASKS]({slug}/TASKS.md) / [VERIFICATION]({slug}/VERIFICATION.md) / "
+                            f"[RETROSPECTIVE]({slug}/RETROSPECTIVE.md)\n"
+                            "상세 모드에서는 각 별도 문서에 계획·작업·검증·회고의 상세와 결과를 기록한다.\n")
+            relative = spec
+        else:
+            relative = Path("docs/specs") / slug / name
+        files[relative] = content.encode("utf-8")
+    references = f"- {spec.as_posix()}\n"
+    if detailed:
+        references += "".join(f"- docs/specs/{slug}/{name}\n" for name in names[1:])
+    task_source = "TASKS.md의 TASK-001" if detailed else "SPEC의 TASK-001"
+    verification = "VERIFICATION.md" if detailed else "SPEC의 검증 결과 절"
     config_path = safe_path(root, Path("harness.json"))
     config = harness_config.load(root) if config_path.exists() else {}
     if not isinstance(config, dict):
@@ -113,14 +138,13 @@ def feature(root: Path, slug: str, issue: int, apply: bool) -> None:
     files[Path("phases") / slug / "step0.md"] = (
         "# Step 0: " + slug + "\n\n"
         "## 읽어야 할 파일\n\n"
-        f"- docs/specs/{slug}/SPEC.md\n- docs/specs/{slug}/PLAN.md\n"
-        f"- docs/specs/{slug}/TASKS.md\n- docs/WORKFLOW.md\n\n"
-        "## 작업\n\nDRAFT: SPEC/PLAN/TASKS의 미정 항목을 먼저 구체화한다. "
+        + references + "\n"
+        "## 작업\n\nDRAFT: SPEC의 요구사항과 계획·작업의 미정 항목을 먼저 구체화한다. "
         "미정 상태면 구현하지 말고 blocked_reason을 기록한다. "
         "TASK-001만 구현하고 허용 경로와 AC 검증 명령을 따른다.\n\n"
-        "## Acceptance Criteria\n\nTASKS.md의 TASK-001 검증 명령과 수동 QA를 실행한다. "
+        f"## Acceptance Criteria\n\n{task_source} 검증 명령과 수동 QA를 실행한다. "
         "실행하지 못한 검증은 통과로 기록하지 않는다.\n\n"
-        "## 완료 보고\n\nVERIFICATION.md에 AC별 결과, 실제 명령과 종료 코드, "
+        f"## 완료 보고\n\n{verification}에 AC별 결과, 실제 명령과 종료 코드, "
         "변경 파일, 남은 위험을 남긴다. 성공 시 해당 step을 completed + summary, "
         "실패 시 error + error_message, 외부 개입 필요 시 blocked + blocked_reason으로 기록한다.\n"
     ).encode("utf-8")
@@ -158,6 +182,8 @@ def main() -> int:
         p.add_argument("target", type=Path)
         p.add_argument("--apply", action="store_true", help="write changes; default is preview")
         if action == "feature":
+            p.add_argument("--detailed", action="store_true",
+                           help="add separate PLAN/TASKS/VERIFICATION/RETROSPECTIVE for complex features")
             p.add_argument("slug")
             p.add_argument("--issue", type=int, required=True)
     args = parser.parse_args()
@@ -166,7 +192,7 @@ def main() -> int:
         if args.action == "init":
             write_missing(root, bundle(), args.apply)
         else:
-            feature(root, args.slug, args.issue, args.apply)
+            feature(root, args.slug, args.issue, args.apply, args.detailed)
         print("Applied." if args.apply else "Preview only. Add --apply to write.")
         return 0
     except (OSError, ValueError, TypeError) as error:

@@ -37,3 +37,24 @@ CI는 Ubuntu/Windows Python 3.11에서 전체 테스트를 실행한다. 로컬 
 
 Windows Python 3.11 CI의 cp1252 환경에서 발견한 한글 JSON 출력 오류를 재현 테스트로 추가하고 수정했다.
 settings 테스트 파일 읽기도 UTF-8로 명시했다. 변경 후 전체 테스트와 정적 검사를 다시 통과했다.
+
+
+## 문서 기본값 간소화 — 2026-10-21
+
+기준: PR #9의 28d0449. 기존 기록은 위에 보존한다.
+
+- 변경 전 전체: 114 passed, 1 skipped.
+- 변경 후 Windows 전체: 121 passed, 1 skipped (POSIX Git 실행 권한).
+- Ruff (`scripts/project.py`, `scripts/test_project.py`) 및 `git diff --check`: 통과.
+- 새 계약 테스트가 기존 구현에서 실패하는 것을 확인한 후 수정했다.
+- init의 docs 직속 문서가 PRD/ROADMAP/ARCHITECTURE 3개인지, 재실행 비파괴 정책을 검사했다.
+- 기본/--detailed 모두 복사된 CLI로 preview → apply → 실제 생성 파일 및 Markdown 링크를 검사했다.
+- 두 모드의 phase/step은 기존 execute.evidence_error로 근거 검사를 통과했다.
+- 기존 단일 SPEC/이전 기능 폴더 충돌 시 파일 및 index가 보존되는지 검사했다.
+- 설치된 CLI 재사용 시 소비자의 자체 가이드가 다른 프로젝트로 복사되지 않도록 회귀 검증했다.
+- 보안 보호 및 기존 실행기·슬롯·상태·Baden 회귀 테스트를 그대로 실행했다.
+- 별도 읽기 전용 rule-guard/코드 리뷰의 가이드 경로·원본 선택 지적을 수정하고 재검토했다.
+  새 구체적 문제는 없으며 예시·미정 규칙에 대한 기존 감사 한계는 동일하다.
+
+Ubuntu와 Windows CI는 기존 행렬을 유지한다. 최신 커밋별 실행 결과는 PR의 Checks를 참조한다.
+유료 에이전트 호출·운영 DB·배포의 종단 검증은 이번 변경에서도 실행하지 않았다.

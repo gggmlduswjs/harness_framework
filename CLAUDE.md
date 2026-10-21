@@ -1,12 +1,15 @@
 # 프로젝트: {프로젝트명}
 
 ## 어디를 보나
-- [docs/WORKFLOW.md](docs/WORKFLOW.md) — PRD부터 구현·검증·회고까지 공통 흐름
-- [docs/SAFETY.md](docs/SAFETY.md) — 실행 권한과 실패 처리
+- [워크플로](docs/WORKFLOW.md) — PRD부터 구현·검증·회고까지 공통 흐름
+- [안전 정책](docs/SAFETY.md) — 실행 권한과 실패 처리
 - [docs/PRD.md](docs/PRD.md) — 무엇을·왜
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 구조·데이터 흐름
-- [docs/ADR.md](docs/ADR.md) — 기술 결정
-- [docs/UI_GUIDE.md](docs/UI_GUIDE.md) — UI 규칙
+- [docs/ROADMAP.md](docs/ROADMAP.md) — 기능 순서와 종료 증거
+- 기능 기본 문서는 `docs/specs/SPEC-<feature>.md` 하나다. 복잡한 기능만 `--detailed`로 별도 문서를 추가한다.
+- ADR/UI 가이드 등 기존 기술 문서는 현재 위치를 유지하고 필요할 때만 추가한다.
+
+설치본의 공통 가이드는 `templates/guides/WORKFLOW.md`, `templates/guides/SAFETY.md`에 있다.
 
 ## 기술 스택
 - {프레임워크 (예: Next.js 15)}

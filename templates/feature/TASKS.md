@@ -1,6 +1,6 @@
 # TASKS — {{feature}}
 
-Status: draft. [SPEC](SPEC.md) / [PLAN](PLAN.md) / Issue #{{issue}}
+Status: draft. [SPEC]({{spec}}) / [PLAN](PLAN.md) / Issue #{{issue}}
 
 ## TASK-001
 - [ ] 목표: 미정
