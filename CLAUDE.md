@@ -57,6 +57,8 @@ rules/
 - 새 지시를 받으면 작업 시작 전에 `baden_start_task`(prompt, projectName) → 받은 taskId 를 이후 모든 보고에 쓴다.
 - 방향·계획을 정하면 `baden_plan`. 읽기·검색·수정·테스트 실행 전에 `baden_action`, 검증은 `baden_verify`. 끝나면 `baden_complete_task`.
 - baden 서버가 꺼져 있어도 보고는 조용히 버려지고 작업은 막히지 않는다 — 재시도하지 않는다.
+- 커밋 트레일러 `Baden-Task: <taskId>` 는 자동이다 — `baden_start_task`/`complete_task` 의 PostToolUse 훅이 `<git-dir>/baden-tasks`(worktree 별)에 넣고 빼고, `scripts/githooks/prepare-commit-msg` 가 붙인다. 손으로 쓰지 않는다.
+- git 훅 설치: SessionStart 가 `core.hooksPath` 비어 있으면 `scripts/githooks` 로 둔다. 다른 값이면 경고만 — 그 훅에서 `scripts/baden_tasks.py commit-msg "$1"` 을 불러라.
 - 서브에이전트(rule-guard 등)는 MCP 를 못 쓴다 → `scripts/baden_report.py` 로 HTTP 보고한다. 메인 세션은 MCP 도구 그대로.
 
 ## 상속 (계층)
