@@ -57,6 +57,7 @@ rules/
 - 새 지시를 받으면 작업 시작 전에 `baden_start_task`(prompt, projectName) → 받은 taskId 를 이후 모든 보고에 쓴다.
 - 방향·계획을 정하면 `baden_plan`. 읽기·검색·수정·테스트 실행 전에 `baden_action`, 검증은 `baden_verify`. 끝나면 `baden_complete_task`.
 - baden 서버가 꺼져 있어도 보고는 조용히 버려지고 작업은 막히지 않는다 — 재시도하지 않는다.
+- 서브에이전트(rule-guard 등)는 MCP 를 못 쓴다 → `scripts/baden_report.py` 로 HTTP 보고한다. 메인 세션은 MCP 도구 그대로.
 
 ## 상속 (계층)
 - 전역 습관·취향은 `~/.claude/CLAUDE.md`(모든 프로젝트)에서 상속 → 충돌 시 이 파일(프로젝트 규칙)이 우선.
