@@ -4,7 +4,7 @@ Bash|PowerShell: command 를 본다. Read: file_path 가 비밀 .env 면 막는�
 .env.example·.sample·.mock·.template 은 비밀이 아니라 허용.
 원본: bigsix .claude/hooks/block_dangerous.py
 안전띠지 보안 경계가 아니다: 정규식이라 우회 표현(python 으로 열기 등)은 못 막고,
-훅이 죽으면(깨진 입력) 막지 않는다(fail-open).
+깨진 입력은 exit 2로 막는다(fail-closed).
 """
 
 import json
@@ -40,8 +40,8 @@ QUOTED = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'")
 
 def is_secret_env(path: str) -> bool:
     name = PurePath(path.strip("'\"").replace("\\", "/")).name
-    return bool(re.fullmatch(r"\.env(\.[\w.-]+)?", name, re.I)) and not re.search(
-        r"\.(example|sample|mock|template)$", name, re.I
+    return bool(re.fullmatch(r"\.env(\.[\w.-]+)?", name, re.IGNORECASE)) and not re.search(
+        r"\.(example|sample|mock|template)$", name, re.IGNORECASE
     )
 
 
@@ -93,7 +93,19 @@ def blocked(tool_input: dict) -> bool:
 
 
 if __name__ == "__main__":
-    tool_input = json.load(sys.stdin).get("tool_input", {})
+    try:
+        event = json.load(sys.stdin)
+        if not isinstance(event, dict) or not isinstance(event.get("tool_input"), dict):
+            raise TypeError("invalid tool_input")
+        tool_input = event["tool_input"]
+        for field in ("command", "file_path"):
+            if field in tool_input and not isinstance(tool_input[field], str):
+                raise ValueError("invalid field type")
+        if not any(tool_input.get(field) for field in ("command", "file_path")):
+            raise ValueError("missing command or file_path")
+    except (ValueError, TypeError, OSError):
+        print("BLOCKED: invalid safety-hook input", file=sys.stderr)
+        sys.exit(2)
     if blocked(tool_input):
         what = tool_input.get("command") or tool_input.get("file_path")
         print(f"BLOCKED: 위험한 명령어가 감지되었습니다: {what}", file=sys.stderr)

@@ -19,7 +19,8 @@ import harness_config
 
 def deny(reason: str) -> None:
     out = {"hookEventName": "PreToolUse", "permissionDecision": "deny"}
-    print(json.dumps({"hookSpecificOutput": {**out, "permissionDecisionReason": reason}}, ensure_ascii=False))
+    # ASCII JSON escapes preserve the reason even on non-UTF-8 Windows stdout.
+    print(json.dumps({"hookSpecificOutput": {**out, "permissionDecisionReason": reason}}))
 
 
 def check(file_path: str, root: Path, cfg: dict) -> str | None:
